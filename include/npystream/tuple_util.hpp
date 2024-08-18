@@ -82,6 +82,30 @@ struct tuple_info {
   tuple_info& operator=(tuple_info const&) = delete;
 
 private:
+  template <int k>
+  static void constexpr getDataTypes_impl(std::array<char, size>& sizes) {
+    if constexpr (k < size) {
+      sizes[k] = map_type(std::tuple_element_t<k, Tup>{});
+      getDataTypes_impl<k + 1>(sizes);
+    }
+  }
+
+  template <int k>
+  static void constexpr getSizes_impl(std::array<size_t, size>& sizes) {
+    if constexpr (k < size) {
+      sizes[k] = sizeof(std::tuple_element_t<k, Tup>);
+      getSizes_impl<k + 1>(sizes);
+    }
+  }
+
+  template <int k>
+  static void constexpr calc_offsets_impl(std::array<size_t, size>& offsets) {
+    if constexpr (k < size) {
+      offsets[k] = offsets[k - 1] + element_sizes[k - 1];
+      calc_offsets_impl<k + 1>(offsets);
+    }
+  }
+
   static std::array<char, size> constexpr getDataTypes() {
     std::array<char, size> types{};
     getDataTypes_impl<0>(types);
@@ -114,38 +138,13 @@ public:
 
 private:
   static std::array<size_t, size> constexpr calc_offsets() {
-    std::array<size_t, size> offsets{};
-    offsets[0] = 0;
-    calc_offsets_impl<1>(offsets);
-    return offsets;
+    std::array<size_t, size> offsets_{};
+    offsets_[0] = 0;
+    calc_offsets_impl<1>(offsets_);
+    return offsets_;
   }
 
 public:
   static std::array<size_t, size> constexpr offsets = calc_offsets();
-
-private:
-  template <int k>
-  static void constexpr getDataTypes_impl(std::array<char, size>& sizes) {
-    if constexpr (k < size) {
-      sizes[k] = map_type(std::tuple_element_t<k, Tup>{});
-      getDataTypes_impl<k + 1>(sizes);
-    }
-  }
-
-  template <int k>
-  static void constexpr getSizes_impl(std::array<size_t, size>& sizes) {
-    if constexpr (k < size) {
-      sizes[k] = sizeof(std::tuple_element_t<k, Tup>);
-      getSizes_impl<k + 1>(sizes);
-    }
-  }
-
-  template <int k>
-  static void constexpr calc_offsets_impl(std::array<size_t, size>& offsets) {
-    if constexpr (k < size) {
-      offsets[k] = offsets[k - 1] + element_sizes[k - 1];
-      calc_offsets_impl<k + 1>(offsets);
-    }
-  }
 };
 } // namespace npystream
