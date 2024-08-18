@@ -31,13 +31,14 @@
 namespace npystream {
 enum class MemoryOrder { Fortran, C, ColumnMajor = Fortran, RowMajor = C };
 
-std::vector<char> create_npy_header(std::span<uint64_t const> shape, char dtype, unsigned size,
-                                    MemoryOrder = MemoryOrder::C);
+std::vector<unsigned char> create_npy_header(std::span<uint64_t const> shape, char dtype,
+                                             unsigned size, MemoryOrder = MemoryOrder::C);
 
-std::vector<char> create_npy_header(std::span<uint64_t const> shape,
-                                    std::span<std::string_view const> labels,
-                                    std::span<char const> dtypes, std::span<size_t const> sizes,
-                                    MemoryOrder memory_order);
+std::vector<unsigned char> create_npy_header(std::span<uint64_t const> shape,
+                                             std::span<std::string_view const> labels,
+                                             std::span<char const> dtypes,
+                                             std::span<size_t const> sizes,
+                                             MemoryOrder memory_order);
 
 namespace detail {
 template <typename T>
@@ -85,7 +86,7 @@ public:
   }
 
   ~NpyStream() {
-    std::vector<char> updated_header;
+    std::vector<unsigned char> updated_header;
     if (labels.size() == 0) {
       updated_header =
           create_npy_header(std::span<uint64_t>(&values_written, 1), map_type(T{}), sizeof(T));
@@ -104,7 +105,7 @@ public:
     len_lower = (updated_header.size() - 10) % 0x100;
     assert(updated_header.size() == header_end_pos);
     file.seekp(0);
-    file.write(updated_header.data(), updated_header.size());
+    file.write(reinterpret_cast<char*>(updated_header.data()), updated_header.size());
   }
 
   //! write single scalar value into stream
@@ -164,7 +165,7 @@ public:
 private:
   void init(std::filesystem::path const& path) {
     uint64_t const max_elements = std::numeric_limits<uint64_t>::max();
-    std::vector<char> header;
+    std::vector<unsigned char> header;
 
     size_t constexpr tuple_size = std::tuple_size_v<tuple_type>;
 
@@ -188,7 +189,7 @@ private:
     }
 
     file.open(path);
-    file.write(header.data(), header.size());
+    file.write(reinterpret_cast<char*>(header.data()), header.size());
     header_end_pos = header.size();
   }
 

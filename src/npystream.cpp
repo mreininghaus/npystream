@@ -14,17 +14,17 @@
 static_assert(std::endian::native == std::endian::big || std::endian::native == std::endian::little,
               "mixed-endianness not supported");
 
-static std::vector<char>& append(std::vector<char>& vec, std::string_view view) {
+static std::vector<unsigned char>& append(std::vector<unsigned char>& vec, std::string_view view) {
   vec.insert(vec.end(), view.begin(), view.end());
   return vec;
 }
 
-static char constexpr native_endian_symbol =
+static unsigned char constexpr native_endian_symbol =
     (std::endian::native == std::endian::little) ? '<' : '>';
 
 template <std::integral T>
-std::vector<char>& append(std::vector<char>& lhs, const T rhs) {
-  std::array<char, sizeof(T)> buffer;
+std::vector<unsigned char>& append(std::vector<unsigned char>& lhs, const T rhs) {
+  std::array<unsigned char, sizeof(T)> buffer;
   memcpy(buffer.data(), std::addressof(rhs), sizeof(T));
 
   if constexpr (std::endian::native == std::endian::big) {
@@ -35,12 +35,12 @@ std::vector<char>& append(std::vector<char>& lhs, const T rhs) {
   return lhs;
 }
 
-std::vector<char> npystream::create_npy_header(std::span<uint64_t const> const shape,
-                                               std::span<std::string_view const> labels,
-                                               std::span<char const> dtypes,
-                                               std::span<size_t const> sizes,
-                                               MemoryOrder memory_order) {
-  std::vector<char> dict;
+std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const> const shape,
+                                                        std::span<std::string_view const> labels,
+                                                        std::span<char const> dtypes,
+                                                        std::span<size_t const> sizes,
+                                                        MemoryOrder memory_order) {
+  std::vector<unsigned char> dict;
   append(dict, "{'descr': [");
 
   if (labels.size() != dtypes.size() || dtypes.size() != sizes.size() ||
@@ -89,20 +89,21 @@ std::vector<char> npystream::create_npy_header(std::span<uint64_t const> const s
   dict.insert(dict.end(), remainder, ' ');
   dict.back() = '\n';
 
-  std::vector<char> header;
-  header.push_back((char)0x93);
+  std::vector<unsigned char> header;
+  header.push_back((unsigned char)0x93);
   append(header, "NUMPY");
-  header.push_back((char)0x01); // major version of numpy format
-  header.push_back((char)0x00); // minor version of numpy format
+  header.push_back((unsigned char)0x01); // major version of numpy format
+  header.push_back((unsigned char)0x00); // minor version of numpy format
   append(header, (uint16_t)dict.size());
   header.insert(header.end(), dict.begin(), dict.end());
 
   return header;
 }
 
-std::vector<char> npystream::create_npy_header(std::span<uint64_t const> const shape, char dtype,
-                                               unsigned wordsize, MemoryOrder memory_order) {
-  std::vector<char> dict;
+std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const> const shape,
+                                                        char dtype, unsigned wordsize,
+                                                        MemoryOrder memory_order) {
+  std::vector<unsigned char> dict;
   append(dict, "{'descr': '");
   dict.push_back(native_endian_symbol);
   dict.push_back(dtype);
@@ -126,11 +127,11 @@ std::vector<char> npystream::create_npy_header(std::span<uint64_t const> const s
   dict.insert(dict.end(), remainder, ' ');
   dict.back() = '\n';
 
-  std::vector<char> header;
-  header.push_back((char)0x93);
+  std::vector<unsigned char> header;
+  header.push_back((unsigned char)0x93);
   append(header, "NUMPY");
-  header.push_back((char)0x01); // major version of numpy format
-  header.push_back((char)0x00); // minor version of numpy format
+  header.push_back((unsigned char)0x01); // major version of numpy format
+  header.push_back((unsigned char)0x00); // minor version of numpy format
   append(header, (uint16_t)dict.size());
   header.insert(header.end(), dict.begin(), dict.end());
 
