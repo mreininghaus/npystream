@@ -1,6 +1,7 @@
 // Copyright (C) 2024 Maximilian Reininghaus
 // Released under European Union Public License 1.2,
 // see 'EUPL-1.2 EN.txt' file
+// SPDX-License-Identifier: EUPL-1.2
 
 #include <bit>
 #include <concepts>
