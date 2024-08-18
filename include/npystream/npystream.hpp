@@ -68,7 +68,7 @@ class NpyStream {
 public:
   //! create a NpyStream (.npy file) at the given path.
   NpyStream(std::filesystem::path const& path) {
-    if (std::size_t const size = std::tuple_size_v<tuple_type>; size > 1) {
+    if constexpr (std::size_t const size = std::tuple_size_v<tuple_type>; size > 1) {
       labels.reserve(size);
       for (std::size_t i = 0; i < size; ++i) {
         labels.emplace_back(std::format("f{}", i));
@@ -101,8 +101,8 @@ public:
                           std::max(static_cast<uint64_t>(0), len_missing_padding), ' ');
     uint8_t& len_upper = *reinterpret_cast<uint8_t*>(&updated_header[7]);
     uint8_t& len_lower = *reinterpret_cast<uint8_t*>(&updated_header[8]);
-    len_upper = (updated_header.size() - 10) / 0x100;
-    len_lower = (updated_header.size() - 10) % 0x100;
+    len_upper = static_cast<uint8_t>((updated_header.size() - 10u) / 0x100u);
+    len_lower = static_cast<uint8_t>((updated_header.size() - 10u) % 0x100u);
     assert(updated_header.size() == header_end_pos);
     file.seekp(0);
     file.write(reinterpret_cast<char*>(updated_header.data()), updated_header.size());
@@ -170,7 +170,7 @@ private:
     size_t constexpr tuple_size = std::tuple_size_v<tuple_type>;
 
     if (labels.size() == 0) {
-      if (tuple_size == 1) {
+      if constexpr (tuple_size == 1) {
         header = create_npy_header(std::span<uint64_t const>(&max_elements, 1), map_type(T{}),
                                    sizeof(T));
       } else {
