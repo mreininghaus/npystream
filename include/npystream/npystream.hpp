@@ -188,7 +188,7 @@ private:
                                  sizes, MemoryOrder::C);
     }
 
-    file.open(path);
+    file.open(path, std::ios_base::binary);
     file.write(reinterpret_cast<char*>(header.data()), header.size());
     header_end_pos = header.size();
   }
