@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <iterator>
+#include <numeric>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -25,18 +26,13 @@ struct is_bool : public std::is_same<T, bool> {};
 template <typename T>
 bool constexpr is_bool_v = is_bool<T>::value;
 
-template <typename T, size_t N, size_t i>
-bool constexpr has_bool_impl() {
-  if constexpr (i < N)
-    return is_bool_v<std::decay_t<typename std::tuple_element<i, T>::type>> ||
-           has_bool_impl<T, N, i + 1>();
-  else
-    return false;
-}
-
 template <typename T>
 bool constexpr has_bool() {
-  return has_bool_impl<T, std::tuple_size<T>::value, 0>();
+  auto lambda = []<size_t... N>(std::index_sequence<N...>) {
+    return (is_bool_v<std::decay_t<typename std::tuple_element<N, T>::type>> || ...);
+  };
+
+  return lambda(std::make_index_sequence<std::tuple_size_v<T>>());
 }
 
 template <typename A, typename B>
@@ -76,75 +72,34 @@ struct tuple_info {
   static auto constexpr size = std::tuple_size_v<Tup>;
   static bool constexpr has_bool_element = detail::has_bool<Tup>();
 
+  using index_sequence_type = decltype(std::make_index_sequence<size>());
+
   // prevent any instantiation
   tuple_info() = delete;
   tuple_info(tuple_info<Tup> const&) = delete;
   tuple_info& operator=(tuple_info const&) = delete;
 
 private:
-  template <int k>
-  static void constexpr getDataTypes_impl(std::array<char, size>& sizes) {
-    if constexpr (k < size) {
-      sizes[k] = map_type(std::tuple_element_t<k, Tup>{});
-      getDataTypes_impl<k + 1>(sizes);
-    }
+  template <std::size_t... N>
+  static std::array<char, size> constexpr getDataTypes(std::index_sequence<N...>) {
+    std::array<char, size> s = {map_type(std::tuple_element_t<N, Tup>{})...};
+    return s;
   }
 
-  template <int k>
-  static void constexpr getSizes_impl(std::array<size_t, size>& sizes) {
-    if constexpr (k < size) {
-      sizes[k] = sizeof(std::tuple_element_t<k, Tup>);
-      getSizes_impl<k + 1>(sizes);
-    }
-  }
-
-  template <int k>
-  static void constexpr calc_offsets_impl(std::array<size_t, size>& offsets) {
-    if constexpr (k < size) {
-      offsets[k] = offsets[k - 1] + element_sizes[k - 1];
-      calc_offsets_impl<k + 1>(offsets);
-    }
-  }
-
-  static std::array<char, size> constexpr getDataTypes() {
-    std::array<char, size> types{};
-    getDataTypes_impl<0>(types);
-    return types;
-  }
-
-  static std::array<size_t, size> constexpr getElementSizes() {
-    std::array<size_t, size> sizes{};
-    getSizes_impl<0>(sizes);
-    return sizes;
+  template <std::size_t... N>
+  static std::array<size_t, size> constexpr getElementSizes(std::index_sequence<N...>) {
+    std::array<size_t, size> s = {sizeof(std::tuple_element_t<N, Tup>)...};
+    return s;
   }
 
 public:
-  static std::array<char, size> constexpr data_types = getDataTypes();
-  static std::array<size_t, size> constexpr element_sizes = getElementSizes();
-
-private:
-  static size_t constexpr sum_size_impl() {
-    size_t sum{};
-
-    for (auto const& v : element_sizes) {
-      sum += v;
-    }
-
-    return sum;
-  }
-
-public:
-  static size_t constexpr sum_sizes = sum_size_impl();
-
-private:
-  static std::array<size_t, size> constexpr calc_offsets() {
-    std::array<size_t, size> offsets_{};
-    offsets_[0] = 0;
-    calc_offsets_impl<1>(offsets_);
-    return offsets_;
-  }
-
-public:
-  static std::array<size_t, size> constexpr offsets = calc_offsets();
+  static std::array<char, size> constexpr data_types = getDataTypes(index_sequence_type{});
+  static std::array<size_t, size> constexpr element_sizes = getElementSizes(index_sequence_type{});
+  static size_t constexpr sum_sizes = std::reduce(element_sizes.cbegin(), element_sizes.cend());
+  static std::array<size_t, size> constexpr offsets = []() {
+    std::array<size_t, size> values;
+    std::exclusive_scan(element_sizes.cbegin(), element_sizes.cend(), values.begin(), size_t{});
+    return values;
+  }();
 };
 } // namespace npystream
