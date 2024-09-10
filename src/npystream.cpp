@@ -6,10 +6,11 @@
 #include <bit>
 #include <concepts>
 #include <cstring>
-#include <npystream/npystream.hpp>
 #include <span>
 #include <string_view>
 #include <vector>
+
+#include <npystream/npystream.hpp>
 
 static_assert(std::endian::native == std::endian::big || std::endian::native == std::endian::little,
               "mixed-endianness not supported");
@@ -33,6 +34,28 @@ std::vector<unsigned char>& append(std::vector<unsigned char>& lhs, const T rhs)
     lhs.insert(lhs.end(), buffer.cbegin(), buffer.cend());
   }
   return lhs;
+}
+
+static std::vector<unsigned char> finalize_header(std::vector<unsigned char> dict) {
+  // pad with spaces so that preamble+dict is modulo 16 bytes. preamble is 10
+  // bytes. dict needs to end with \n
+  int const remainder = 16 - (10 + dict.size()) % 16;
+  dict.insert(dict.end(), remainder, ' ');
+  dict.back() = '\n';
+
+  if (dict.size() > 0xffff) {
+    throw std::runtime_error{"dictionary too large for .npy header"};
+  }
+
+  std::vector<unsigned char> header;
+  header.push_back((unsigned char)0x93);
+  append(header, "NUMPY");
+  header.push_back((unsigned char)0x01); // major version of numpy format
+  header.push_back((unsigned char)0x00); // minor version of numpy format
+  append(header, (uint16_t)dict.size());
+  header.insert(header.end(), dict.begin(), dict.end());
+
+  return header;
 }
 
 std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const> const shape,
@@ -83,21 +106,7 @@ std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const
   }
   append(dict, "), }");
 
-  // pad with spaces so that preamble+dict is modulo 16 bytes. preamble is 10
-  // bytes. dict needs to end with \n
-  int const remainder = 16 - (10 + dict.size()) % 16;
-  dict.insert(dict.end(), remainder, ' ');
-  dict.back() = '\n';
-
-  std::vector<unsigned char> header;
-  header.push_back((unsigned char)0x93);
-  append(header, "NUMPY");
-  header.push_back((unsigned char)0x01); // major version of numpy format
-  header.push_back((unsigned char)0x00); // minor version of numpy format
-  append(header, (uint16_t)dict.size());
-  header.insert(header.end(), dict.begin(), dict.end());
-
-  return header;
+  return finalize_header(std::move(dict));
 }
 
 std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const> const shape,
@@ -121,19 +130,5 @@ std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const
   }
   append(dict, "), }");
 
-  // pad with spaces so that preamble+dict is modulo 16 bytes. preamble is 10
-  // bytes. dict needs to end with \n
-  int const remainder = 16 - (10 + dict.size()) % 16;
-  dict.insert(dict.end(), remainder, ' ');
-  dict.back() = '\n';
-
-  std::vector<unsigned char> header;
-  header.push_back((unsigned char)0x93);
-  append(header, "NUMPY");
-  header.push_back((unsigned char)0x01); // major version of numpy format
-  header.push_back((unsigned char)0x00); // minor version of numpy format
-  append(header, (uint16_t)dict.size());
-  header.insert(header.end(), dict.begin(), dict.end());
-
-  return header;
+  return finalize_header(std::move(dict));
 }

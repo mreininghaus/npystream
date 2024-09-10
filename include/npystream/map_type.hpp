@@ -11,7 +11,7 @@
 
 namespace npystream {
 
-template <typename F>
+template <std::floating_point F>
 char constexpr map_type(std::complex<F>) {
   return 'c';
 }

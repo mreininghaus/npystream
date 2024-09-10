@@ -48,6 +48,7 @@ template <std::floating_point T>
 struct is_complex<std::complex<T>> : std::true_type {};
 } // namespace detail
 
+//! Serializable types are the fundamental arithmetic types (int, float, ...), and std::complex.
 template <typename... TArgs>
 concept npy_serializable =
     ((std::is_arithmetic_v<TArgs> || detail::is_complex<TArgs>::value) && ...);
@@ -77,8 +78,7 @@ public:
     init(path);
   }
 
-  //! create a NpyStream for structured data at the given path with labelled
-  //! data columns
+  //! create a NpyStream for structured data at the given path with labelled data columns
   template <typename Container>
   NpyStream(std::filesystem::path const& path, Container const& labels_)
       : labels{std::cbegin(labels_), std::cend(labels_)} {
@@ -117,7 +117,7 @@ public:
     return *this;
   }
 
-  //! write single data tuple point into stream
+  //! write single data tuple into stream
   template <tuple_like Tup>
     requires(convertible<Tup, tuple_type>)
   NpyStream& operator<<(Tup const& val) {
@@ -145,7 +145,7 @@ public:
     return write(std::span<std::add_const_t<std::iter_value_t<TConstIter>>>{begin, end});
   }
 
-  /*
+  /**
    * Write sequence of data, given as iterator pair, into stream. In case of
    * structured data, the iterator has to return std::tuples whose individual
    * member types match the data types of the file.
@@ -188,9 +188,10 @@ private:
                                  sizes, MemoryOrder::C);
     }
 
+    header_end_pos = header.size();
+    std::fill(std::next(header.begin(), 8), header.end(), 0);
     file.open(path, std::ios_base::binary);
     file.write(reinterpret_cast<char*>(header.data()), header.size());
-    header_end_pos = header.size();
   }
 
   template <tuple_like U, int k = 0>
