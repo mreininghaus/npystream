@@ -40,6 +40,10 @@ std::vector<unsigned char> create_npy_header(std::span<uint64_t const> shape,
                                              std::span<size_t const> sizes,
                                              MemoryOrder memory_order);
 
+void wrap_up(std::ofstream& file, uint64_t values_written, size_t header_end_pos,
+             std::span<std::string const> labels, std::span<char const> dtypes,
+             std::span<size_t const> element_sizes);
+
 namespace detail {
 template <typename T>
 struct is_complex : std::false_type {};
@@ -86,53 +90,41 @@ public:
   }
 
   ~NpyStream() {
-    std::vector<unsigned char> updated_header;
-    if (labels.size() == 0) {
-      updated_header =
-          create_npy_header(std::span<uint64_t>(&values_written, 1), map_type(T{}), sizeof(T));
-    } else {
-      std::vector<std::string_view> label_views(labels.cbegin(), labels.cend());
-      updated_header = create_npy_header(std::span<uint64_t const>(&values_written, 1), label_views,
-                                         dtypes, sizes, MemoryOrder::C);
-    }
-
-    uint64_t const len_missing_padding = header_end_pos - updated_header.size();
-    updated_header.insert(std::prev(updated_header.end()),
-                          std::max(static_cast<uint64_t>(0), len_missing_padding), ' ');
-    uint8_t& len_upper = *reinterpret_cast<uint8_t*>(&updated_header[7]);
-    uint8_t& len_lower = *reinterpret_cast<uint8_t*>(&updated_header[8]);
-    len_upper = static_cast<uint8_t>((updated_header.size() - 10u) / 0x100u);
-    len_lower = static_cast<uint8_t>((updated_header.size() - 10u) % 0x100u);
-    assert(updated_header.size() == header_end_pos);
-    file.seekp(0);
-    file.write(reinterpret_cast<char*>(updated_header.data()), updated_header.size());
+    flush_buffer();
+    wrap_up(file, values_written, header_end_pos, labels, dtypes, sizes);
   }
 
   //! write single scalar value into stream
   template <std::same_as<T> U = T>
     requires(sizeof...(TArgs) == 0)
   NpyStream& operator<<(U val) {
-    file.write(reinterpret_cast<char const*>(&val), sizeof(val));
-    ++values_written;
-    return *this;
+    return (*this << std::tuple<T>{val});
   }
 
   //! write single data tuple into stream
   template <tuple_like Tup>
     requires(convertible<Tup, tuple_type>)
   NpyStream& operator<<(Tup const& val) {
-    using tup_info = tuple_info<Tup>;
-    std::array<char, tup_info::sum_sizes> buffer{};
-    fill(val, buffer.data());
-    file.write(buffer.data(), buffer.size());
+    fill(val, buffer[buffer_size].data());
+    if (++buffer_size == buffer_capacity) {
+      flush_buffer();
+    }
     ++values_written;
     return *this;
+  }
+
+  void flush_buffer() {
+    file.write(buffer[0].data(), buffer_size * buffer[0].size());
+    buffer_size = 0;
   }
 
   //! write contiguous block of scalar data, given as std::span, into stream
   template <std::same_as<T> U = T>
     requires(sizeof...(TArgs) == 0)
   NpyStream& write(std::span<U const> data) {
+    if (buffer_size) {
+      flush_buffer();
+    }
     file.write(reinterpret_cast<char const*>(data.data()), sizeof(T) * data.size());
     values_written += data.size();
     return *this;
@@ -150,11 +142,11 @@ public:
    * structured data, the iterator has to return std::tuples whose individual
    * member types match the data types of the file.
    */
-  template <typename TConstIter>
+  template <typename TConstIter, std::sentinel_for<TConstIter> Sentinel>
     requires(!std::contiguous_iterator<TConstIter> ||
              (std::tuple_size_v<tuple_type> > 1 &&
               convertible<std::iter_value_t<TConstIter>, tuple_type>))
-  NpyStream& write(TConstIter begin, TConstIter end) {
+  NpyStream& write(TConstIter begin, Sentinel end) {
     for (; begin != end; ++begin) {
       *this << *begin;
     }
@@ -183,7 +175,7 @@ private:
             "labels size does not match number of elements in structured type"};
       }
 
-      std::vector<std::string_view> label_views(labels.cbegin(), labels.cend());
+      std::vector<std::string_view> const label_views(labels.cbegin(), labels.cend());
       header = create_npy_header(std::span<uint64_t const>(&max_elements, 1), label_views, dtypes,
                                  sizes, MemoryOrder::C);
     }
@@ -212,7 +204,13 @@ private:
 
   std::ofstream file;
   size_t header_end_pos;
-  uint64_t values_written{};
+  uint64_t values_written{}, buffer_size{};
   std::vector<std::string> labels{};
+
+  static size_t constexpr buffer_capacity =
+      std::max<size_t>(1, 256 / tuple_info<tuple_type>::sum_sizes);
+  std::array<std::array<char, tuple_info<tuple_type>::sum_sizes>, buffer_capacity> buffer{};
+
+  static_assert(sizeof(buffer) == buffer_capacity * tuple_info<tuple_type>::sum_sizes);
 };
 } // namespace npystream

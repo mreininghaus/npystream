@@ -8,6 +8,7 @@
 #include <complex>
 #include <cstdlib>
 #include <deque>
+#include <functional>
 #include <list>
 #include <numeric>
 #include <ranges>
@@ -50,9 +51,22 @@ int main() {
     std::ranges::fill(vec, true);
     npystream::NpyStream<bool> stream{"bool.npy"};
     stream.write(vec.cbegin(), vec.cend());
-    for (bool b : vec) {
-      stream << b;
-    }
+  }
+
+  {
+    std::vector<unsigned> data;
+    auto const i = std::ranges::iota_view<unsigned, unsigned>{5u, 10u};
+    data.insert(data.end(), i.begin(), i.end());
+
+    npystream::NpyStream<unsigned> stream{"unsigned.npy"};
+    stream << 1u << 2u << 3u << 4u;
+    stream.write(std::span{std::as_const(data)});
+    stream << 10u << 11u << 12u;
+
+    std::transform(data.cbegin(), data.cend(), data.begin(),
+                   std::bind_front(std::plus<unsigned>{}, 8u));
+    stream.write(std::span{std::as_const(data)});
+    stream << 18u << std::tuple{19u} << std::array<unsigned, 1>{20u};
   }
 
   return EXIT_SUCCESS;

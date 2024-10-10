@@ -6,6 +6,7 @@
 #include <bit>
 #include <concepts>
 #include <cstring>
+#include <fstream>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -14,6 +15,31 @@
 
 static_assert(std::endian::native == std::endian::big || std::endian::native == std::endian::little,
               "mixed-endianness not supported");
+
+void npystream::wrap_up(std::ofstream& file, uint64_t values_written, size_t header_end_pos,
+                        std::span<std::string const> labels, std::span<char const> dtypes,
+                        std::span<size_t const> element_sizes) {
+  std::vector<unsigned char> updated_header;
+  if (labels.size() == 0) {
+    updated_header =
+        create_npy_header(std::span<uint64_t>(&values_written, 1), dtypes[0], element_sizes[0]);
+  } else {
+    std::vector<std::string_view> label_views(labels.begin(), labels.end());
+    updated_header = create_npy_header(std::span<uint64_t const>(&values_written, 1), label_views,
+                                       dtypes, element_sizes, MemoryOrder::C);
+  }
+
+  uint64_t const len_missing_padding = header_end_pos - updated_header.size();
+  updated_header.insert(std::prev(updated_header.end()),
+                        std::max(static_cast<uint64_t>(0), len_missing_padding), ' ');
+  uint8_t& len_upper = *reinterpret_cast<uint8_t*>(&updated_header[7]);
+  uint8_t& len_lower = *reinterpret_cast<uint8_t*>(&updated_header[8]);
+  len_upper = static_cast<uint8_t>((updated_header.size() - 10u) / 0x100u);
+  len_lower = static_cast<uint8_t>((updated_header.size() - 10u) % 0x100u);
+  assert(updated_header.size() == header_end_pos);
+  file.seekp(0);
+  file.write(reinterpret_cast<char*>(updated_header.data()), updated_header.size());
+}
 
 static std::vector<unsigned char>& append(std::vector<unsigned char>& vec, std::string_view view) {
   vec.insert(vec.end(), view.begin(), view.end());
@@ -24,7 +50,7 @@ static unsigned char constexpr native_endian_symbol =
     (std::endian::native == std::endian::little) ? '<' : '>';
 
 template <std::integral T>
-std::vector<unsigned char>& append(std::vector<unsigned char>& lhs, const T rhs) {
+static std::vector<unsigned char>& append(std::vector<unsigned char>& lhs, const T rhs) {
   std::array<unsigned char, sizeof(T)> buffer;
   memcpy(buffer.data(), std::addressof(rhs), sizeof(T));
 
