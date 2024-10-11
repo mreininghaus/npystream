@@ -32,7 +32,7 @@ namespace npystream {
 enum class MemoryOrder { Fortran, C, ColumnMajor = Fortran, RowMajor = C };
 
 std::vector<unsigned char> create_npy_header(std::span<uint64_t const> shape, char dtype,
-                                             unsigned size, MemoryOrder = MemoryOrder::C);
+                                             size_t size, MemoryOrder = MemoryOrder::C);
 
 std::vector<unsigned char> create_npy_header(std::span<uint64_t const> shape,
                                              std::span<std::string_view const> labels,

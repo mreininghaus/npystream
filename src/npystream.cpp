@@ -136,7 +136,7 @@ std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const
 }
 
 std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const> const shape,
-                                                        char dtype, unsigned wordsize,
+                                                        char dtype, size_t wordsize,
                                                         MemoryOrder memory_order) {
   std::vector<unsigned char> dict;
   append(dict, "{'descr': '");
