@@ -2,7 +2,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.10)
 
 project(npystream LANGUAGES CXX VERSION 0.1.0)
 
-add_library(npystream "src/npystream.cpp"
+add_library(npystream SHARED "src/npystream.cpp"
   "include/npystream/npystream.hpp"
   "include/npystream/map_type.hpp"
   "include/npystream/tuple_util.hpp"
