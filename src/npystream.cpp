@@ -16,6 +16,8 @@
 static_assert(std::endian::native == std::endian::big || std::endian::native == std::endian::little,
               "mixed-endianness not supported");
 
+using namespace std::literals::string_view_literals;
+
 void npystream::wrap_up(std::ofstream& file, uint64_t values_written, size_t header_end_pos,
                         std::span<std::string const> labels, std::span<char const> dtypes,
                         std::span<size_t const> element_sizes) {
@@ -42,6 +44,12 @@ void npystream::wrap_up(std::ofstream& file, uint64_t values_written, size_t hea
 }
 
 static std::vector<unsigned char>& append(std::vector<unsigned char>& vec, std::string_view view) {
+  vec.insert(vec.end(), view.cbegin(), view.cend());
+  return vec;
+}
+
+static std::vector<unsigned char>& append(std::vector<unsigned char>& vec,
+                                          std::span<unsigned char const> view) {
   vec.insert(vec.end(), view.begin(), view.end());
   return vec;
 }
@@ -73,12 +81,13 @@ static std::vector<unsigned char> finalize_header(std::vector<unsigned char> dic
     throw std::runtime_error{"dictionary too large for .npy header"};
   }
 
-  std::vector<unsigned char> header;
-  header.push_back((unsigned char)0x93);
-  append(header, "NUMPY");
-  header.push_back((unsigned char)0x01); // major version of numpy format
-  header.push_back((unsigned char)0x00); // minor version of numpy format
-  append(header, (uint16_t)dict.size());
+  std::vector<unsigned char> header{};
+  unsigned char magic_byte = 0x93;
+  header.push_back(magic_byte);
+  append(header, "NUMPY"sv);
+  auto const version = std::to_array<unsigned char>({0x01, 0x00});
+  append(header, std::span{version});
+  append(header, static_cast<uint16_t>(dict.size()));
   header.insert(header.end(), dict.begin(), dict.end());
 
   return header;
@@ -90,7 +99,7 @@ std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const
                                                         std::span<size_t const> sizes,
                                                         MemoryOrder memory_order) {
   std::vector<unsigned char> dict;
-  append(dict, "{'descr': [");
+  append(dict, "{'descr': ["sv);
 
   if (labels.size() != dtypes.size() || dtypes.size() != sizes.size() ||
       sizes.size() != labels.size()) {
@@ -102,16 +111,17 @@ std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const
     auto const& dtype = dtypes[i];
     auto const& size = sizes[i];
 
-    append(dict, "('");
+    append(dict, "('"sv);
     append(dict, label);
-    append(dict, "', '");
+    append(dict, "', '"sv);
     dict.push_back(native_endian_symbol);
     dict.push_back(dtype);
-    append(dict, std::to_string(size));
-    append(dict, "')");
+    auto const size_str = std::to_string(size);
+    append(dict, size_str);
+    append(dict, "')"sv);
 
     if (i + 1 != dtypes.size()) {
-      append(dict, ", ");
+      append(dict, ", "sv);
     }
   }
 
@@ -119,18 +129,18 @@ std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const
     dict.push_back(',');
   }
 
-  append(dict, "], 'fortran_order': ");
-  append(dict, (memory_order == MemoryOrder::C) ? "False" : "True");
-  append(dict, ", 'shape': (");
+  append(dict, "], 'fortran_order': "sv);
+  append(dict, (memory_order == MemoryOrder::C) ? "False"sv : "True"sv);
+  append(dict, ", 'shape': ("sv);
   append(dict, std::to_string(shape[0]));
   for (size_t i = 1; i < shape.size(); i++) {
-    append(dict, ", ");
+    append(dict, ", "sv);
     append(dict, std::to_string(shape[i]));
   }
   if (shape.size() == 1) {
-    append(dict, ",");
+    append(dict, ","sv);
   }
-  append(dict, "), }");
+  append(dict, "), }"sv);
 
   return finalize_header(std::move(dict));
 }
@@ -139,22 +149,22 @@ std::vector<unsigned char> npystream::create_npy_header(std::span<uint64_t const
                                                         char dtype, size_t wordsize,
                                                         MemoryOrder memory_order) {
   std::vector<unsigned char> dict;
-  append(dict, "{'descr': '");
+  append(dict, "{'descr': '"sv);
   dict.push_back(native_endian_symbol);
   dict.push_back(dtype);
   append(dict, std::to_string(wordsize));
-  append(dict, "', 'fortran_order': ");
-  append(dict, (memory_order == MemoryOrder::C) ? "False" : "True");
-  append(dict, ", 'shape': (");
+  append(dict, "', 'fortran_order': "sv);
+  append(dict, (memory_order == MemoryOrder::C) ? "False"sv : "True"sv);
+  append(dict, ", 'shape': ("sv);
   append(dict, std::to_string(shape[0]));
   for (size_t i = 1; i < shape.size(); i++) {
-    append(dict, ", ");
+    append(dict, ", "sv);
     append(dict, std::to_string(shape[i]));
   }
   if (shape.size() == 1) {
-    append(dict, ",");
+    append(dict, ","sv);
   }
-  append(dict, "), }");
+  append(dict, "), }"sv);
 
   return finalize_header(std::move(dict));
 }
