@@ -27,7 +27,7 @@ struct is_bool : public std::is_same<T, bool> {};
 template <typename T>
 bool constexpr is_bool_v = is_bool<T>::value;
 
-template <typename T>
+template <tuple_like T>
 bool constexpr has_bool() {
   auto lambda = []<size_t... N>(std::index_sequence<N...>) {
     return (is_bool_v<std::decay_t<typename std::tuple_element<N, T>::type>> || ...);
