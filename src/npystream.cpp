@@ -11,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-#include <npystream/npystream.hpp>
+#include "npystream/npystream.hpp"
 
 static_assert(std::endian::native == std::endian::big || std::endian::native == std::endian::little,
               "mixed-endianness not supported");

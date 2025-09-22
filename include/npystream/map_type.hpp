@@ -12,13 +12,13 @@
 namespace npystream {
 
 template <std::floating_point F>
-char constexpr map_type(std::complex<F>) {
+char consteval map_type(std::complex<F>) {
   return 'c';
 }
 
 template <typename T>
   requires(std::is_arithmetic_v<T>)
-char constexpr map_type(T) {
+char consteval map_type(T) {
   if constexpr (std::is_same_v<T, bool>) {
     return 'b';
   } else if constexpr (std::is_integral_v<T>) {

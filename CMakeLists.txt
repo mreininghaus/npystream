@@ -1,6 +1,6 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.23)
 
-project(npystream LANGUAGES CXX VERSION 0.3.0)
+project(npystream LANGUAGES CXX VERSION 0.4.0)
 
 add_library(npystream)
 

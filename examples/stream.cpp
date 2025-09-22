@@ -66,7 +66,7 @@ int main() {
     std::transform(data.cbegin(), data.cend(), data.begin(),
                    std::bind_front(std::plus<unsigned>{}, 8u));
     stream.write(std::span{std::as_const(data)});
-    stream << 18u << std::tuple{19u} << std::array<unsigned, 1>{20u};
+    stream << 18u << std::tuple{19u} << std::to_array({20u});
   }
 
   return EXIT_SUCCESS;

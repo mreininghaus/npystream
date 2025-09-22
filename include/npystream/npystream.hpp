@@ -14,7 +14,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
-#include <initializer_list>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -147,9 +147,7 @@ public:
              (std::tuple_size_v<tuple_type> > 1 &&
               convertible<std::iter_value_t<TConstIter>, tuple_type>))
   NpyStream& write(TConstIter begin, Sentinel end) {
-    for (; begin != end; ++begin) {
-      *this << *begin;
-    }
+    std::for_each(begin, end, std::bind_front(&NpyStream::operator<< <tuple_type>, this));
 
     return *this;
   }
@@ -181,7 +179,7 @@ private:
     }
 
     header_end_pos = header.size();
-    std::fill(std::next(header.begin(), 8), header.end(), 0);
+    std::fill(std::next(header.begin(), 8), header.end(), '\0');
     file.open(path, std::ios_base::binary);
     file.write(reinterpret_cast<char*>(header.data()), header.size());
   }

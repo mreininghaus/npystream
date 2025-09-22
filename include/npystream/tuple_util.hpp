@@ -7,7 +7,7 @@
 
 #include <array>
 #include <cstddef>
-#include <iterator>
+#include <functional>
 #include <numeric>
 #include <tuple>
 #include <type_traits>
@@ -28,7 +28,7 @@ template <typename T>
 bool constexpr is_bool_v = is_bool<T>::value;
 
 template <tuple_like T>
-bool constexpr has_bool() {
+bool consteval has_bool() {
   auto lambda = []<size_t... N>(std::index_sequence<N...>) {
     return (is_bool_v<std::decay_t<typename std::tuple_element<N, T>::type>> || ...);
   };
@@ -83,24 +83,22 @@ struct tuple_info {
 private:
   template <std::size_t... N>
   static std::array<char, size> constexpr getDataTypes(std::index_sequence<N...>) {
-    std::array<char, size> s = {map_type(std::tuple_element_t<N, Tup>{})...};
-    return s;
+    return std::to_array({map_type(std::tuple_element_t<N, Tup>{})...});
   }
 
   template <std::size_t... N>
   static std::array<size_t, size> constexpr getElementSizes(std::index_sequence<N...>) {
-    std::array<size_t, size> s = {sizeof(std::tuple_element_t<N, Tup>)...};
-    return s;
+    return std::to_array({sizeof(std::tuple_element_t<N, Tup>)...});
   }
 
 public:
   static std::array<char, size> constexpr data_types = getDataTypes(index_sequence_type{});
   static std::array<size_t, size> constexpr element_sizes = getElementSizes(index_sequence_type{});
   static size_t constexpr sum_sizes = std::reduce(element_sizes.cbegin(), element_sizes.cend());
-  static std::array<size_t, size> constexpr offsets = []() {
+  static std::array<size_t, size> constexpr offsets = std::invoke([]() {
     std::array<size_t, size> values;
     std::exclusive_scan(element_sizes.cbegin(), element_sizes.cend(), values.begin(), size_t{});
     return values;
-  }();
+  });
 };
 } // namespace npystream
