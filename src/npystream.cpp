@@ -34,8 +34,15 @@ void npystream::wrap_up(std::ofstream& file, uint64_t values_written, size_t hea
   uint64_t const len_missing_padding = header_end_pos - updated_header.size();
   updated_header.insert(std::prev(updated_header.end()),
                         std::max(static_cast<uint64_t>(0), len_missing_padding), ' ');
-  uint8_t& len_upper = *reinterpret_cast<uint8_t*>(&updated_header[7]);
-  uint8_t& len_lower = *reinterpret_cast<uint8_t*>(&updated_header[8]);
+
+  auto const header_span = std::span{updated_header};
+  auto const numpy = header_span.subspan(1, 5);
+  auto const version = std::span{numpy.end(), 2};
+  auto const len = std::span{version.end(), 2};
+
+  uint8_t& len_lower = len.front();
+  uint8_t& len_upper = len.back();
+
   len_upper = static_cast<uint8_t>((updated_header.size() - 10u) / 0x100u);
   len_lower = static_cast<uint8_t>((updated_header.size() - 10u) % 0x100u);
   assert(updated_header.size() == header_end_pos);
