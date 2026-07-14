@@ -9,6 +9,7 @@
 #include <cassert>
 #include <complex>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -50,6 +51,23 @@ struct is_complex : std::false_type {};
 
 template <std::floating_point T>
 struct is_complex<std::complex<T>> : std::true_type {};
+
+template <tuple_like U, size_t k = 0>
+static void fill(U const& tup, std::span<std::byte> buffer) {
+  auto constexpr offsets = tuple_info<U>::offsets;
+
+  if constexpr (k < tuple_info<U>::size) {
+    auto const& elem = std::get<k>(tup);
+    auto constexpr elem_size = sizeof(elem);
+    static_assert(tuple_info<U>::element_sizes[k] == elem_size); // sanity check
+
+    std::array<std::byte, elem_size> tmp{};
+    memcpy(tmp.data(), std::addressof(elem), elem_size);
+    std::copy(tmp.cbegin(), tmp.cend(), std::next(buffer.begin(), offsets[k]));
+    fill<U, k + 1>(tup, buffer);
+  }
+}
+
 } // namespace detail
 
 //! Serializable types are the fundamental arithmetic types (int, float, ...), and std::complex.
@@ -105,7 +123,7 @@ public:
   template <tuple_like Tup>
     requires(convertible<Tup, tuple_type>)
   NpyStream& operator<<(Tup const& val) {
-    fill(val, buffer[buffer_size].data());
+    detail::fill(val, buffer[buffer_size]);
     if (++buffer_size == buffer_capacity) {
       flush_buffer();
     }
@@ -114,7 +132,8 @@ public:
   }
 
   void flush_buffer() {
-    file.write(buffer[0].data(), buffer_size * buffer[0].size());
+    file.write(reinterpret_cast<char const*>(std::as_const(buffer[0]).data()),
+               buffer_size * buffer[0].size());
     buffer_size = 0;
   }
 
@@ -184,22 +203,6 @@ private:
     file.write(reinterpret_cast<char*>(header.data()), header.size());
   }
 
-  template <tuple_like U, int k = 0>
-  static void fill(U const& tup, char* buffer) {
-    auto constexpr offsets = tuple_info<U>::offsets;
-
-    if constexpr (k < tuple_info<U>::size) {
-      auto const& elem = std::get<k>(tup);
-      auto constexpr elem_size = sizeof(elem);
-      static_assert(tuple_info<U>::element_sizes[k] == elem_size); // sanity check
-
-      std::array<char, elem_size> tmp{};
-      memcpy(tmp.data(), std::addressof(elem), elem_size);
-      std::copy(tmp.cbegin(), tmp.cend(), buffer + offsets[k]);
-      fill<U, k + 1>(tup, buffer);
-    }
-  }
-
   std::ofstream file;
   size_t header_end_pos;
   uint64_t values_written{}, buffer_size{};
@@ -207,7 +210,7 @@ private:
 
   static size_t constexpr buffer_capacity =
       std::max<size_t>(1, 256 / tuple_info<tuple_type>::sum_sizes);
-  std::array<std::array<char, tuple_info<tuple_type>::sum_sizes>, buffer_capacity> buffer{};
+  std::array<std::array<std::byte, tuple_info<tuple_type>::sum_sizes>, buffer_capacity> buffer{};
 
   static_assert(sizeof(buffer) == buffer_capacity * tuple_info<tuple_type>::sum_sizes);
 };
