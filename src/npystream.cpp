@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+#include <iostream>
+
 #include "npystream/npystream.hpp"
 
 static_assert(std::endian::native == std::endian::big || std::endian::native == std::endian::little,

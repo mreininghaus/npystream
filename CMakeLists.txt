@@ -1,17 +1,22 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.23)
 
-project(npystream LANGUAGES CXX VERSION 0.4.2)
+project(npystream LANGUAGES CXX VERSION 0.5.0)
 
 add_library(npystream)
 
 target_sources(npystream
   PRIVATE "src/npystream.cpp"
+          "src/npzstream.cpp"
   PUBLIC FILE_SET HEADERS
   BASE_DIRS "include"
   FILES "include/npystream/npystream.hpp"
+        "include/npystream/npzstream.hpp"
         "include/npystream/map_type.hpp"
         "include/npystream/tuple_util.hpp"
 )
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(npystream PRIVATE ZLIB::ZLIB)
 
 target_compile_features(npystream PUBLIC cxx_std_20)
 set_property(TARGET npystream PROPERTY CXX_EXTENSIONS OFF)
@@ -55,14 +60,17 @@ install(FILES
 
 option (NPYSTREAM_BUILD_EXAMPLE "build npystream example" OFF)
 if (NPYSTREAM_BUILD_EXAMPLE)
-  add_executable(stream "examples/stream.cpp")
-  target_link_libraries(stream npystream)
+  add_library(example_settings INTERFACE)
+  target_link_libraries(example_settings INTERFACE npystream)
+  target_compile_features(example_settings INTERFACE cxx_std_23)
   if(MSVC)
-    target_compile_options(stream PRIVATE /W4 /WX)
+    target_compile_options(example_settings INTERFACE /W4 /WX)
   else()
-    target_compile_options(stream PRIVATE -Wall -Wextra -pedantic -Wfatal-errors)
+    target_compile_options(example_settings INTERFACE -Wall -Wextra -pedantic -Wfatal-errors)
   endif()
-endif()
 
-# set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-# include(Packing)
+  add_executable(stream "examples/stream.cpp")
+  add_executable(stream_npz "examples/stream_npz.cpp")
+  target_link_libraries(stream PRIVATE example_settings)
+  target_link_libraries(stream_npz PRIVATE example_settings)
+endif()

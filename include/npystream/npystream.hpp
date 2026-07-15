@@ -1,4 +1,4 @@
-// Copyright (C) 2024 Maximilian Reininghaus
+// Copyright (C) 2024-2026 Maximilian Reininghaus
 // Released under European Union Public License 1.2,
 // see LICENSE file
 // SPDX-License-Identifier: EUPL-1.2
@@ -68,6 +68,164 @@ static void fill(U const& tup, std::span<std::byte> buffer) {
   }
 }
 
+/**
+ * This class is conditionally used as base class for NpzStream in order
+ * to enable/disable the functions based on the template parameters
+ */
+template <typename Base, typename T>
+struct Mixin {
+  Base* base;
+
+  Mixin(Base* base_)
+      : base{base_} {}
+
+  //! write single scalar value into stream
+  Base& operator<<(T val) {
+    return (*(base) << std::tuple<T>{val});
+  }
+
+  //! write contiguous block of scalar data, given as std::span, into stream
+  Base& write(std::span<T const> data) {
+    if (base->buffer_size) {
+      base->flush_buffer();
+    }
+
+    base->appendPayload(std::as_bytes(data));
+    base->values_written += data.size();
+
+    return *base;
+  }
+
+  //! write contiguous block of scalar data, given as iterator pair, into stream
+  template <std::contiguous_iterator TConstIter>
+    requires(std::same_as<std::iter_value_t<TConstIter>, T>)
+  Base& write(TConstIter begin, TConstIter end) {
+    return write(std::span<std::add_const_t<std::iter_value_t<TConstIter>>>{begin, end});
+  }
+};
+
+class empty {
+  struct Private {};
+
+public:
+  empty(void*) {};
+  void operator<<(Private) const;
+  void write();
+};
+
+template <typename T, typename... TArgs>
+class RealBase : public std::conditional_t<sizeof...(TArgs) == 0, detail::Mixin<RealBase<T>, T>,
+                                           detail::empty> {
+public:
+  using Base =
+      std::conditional_t<sizeof...(TArgs) == 0, detail::Mixin<RealBase<T>, T>, detail::empty>;
+  friend Base;
+
+  using tuple_type = std::tuple<T, TArgs...>;
+
+  static auto constexpr& dtypes = tuple_info<tuple_type>::data_types;
+  static auto constexpr& sizes = tuple_info<tuple_type>::element_sizes;
+
+  using Base::operator<<;
+  using Base::write;
+
+protected:
+  RealBase()
+      : Base(this) {
+    if constexpr (std::size_t const size = std::tuple_size_v<tuple_type>; size > 1) {
+      labels.reserve(size);
+      for (std::size_t i = 0; i < size; ++i) {
+        labels.emplace_back(std::format("f{}", i));
+      }
+    }
+  }
+
+  template <typename Container>
+  RealBase(Container const& labels_)
+      : Base(this)
+      , labels{std::cbegin(labels_), std::cend(labels_)} {}
+
+  virtual ~RealBase() noexcept(false) = default;
+
+  virtual void appendPayload(std::span<std::byte const>) = 0;
+
+  void flush_buffer() {
+    appendPayload(std::as_bytes(std::span{std::as_const(buffer).begin(), buffer_size}));
+    buffer_size = 0;
+  }
+
+  std::vector<unsigned char> createPlaceholderHeader() {
+    uint64_t const max_elements = std::numeric_limits<uint64_t>::max();
+    std::vector<unsigned char> header = std::invoke([&]() {
+      size_t constexpr tuple_size = std::tuple_size_v<tuple_type>;
+
+      if (labels.size() == 0) {
+        if constexpr (tuple_size == 1) {
+          return create_npy_header(std::span<uint64_t const>(&max_elements, 1), map_type(T{}),
+                                   sizeof(T));
+        } else {
+          throw std::runtime_error{
+              "labels size does not match number of elements in structured type"};
+        }
+      } else {
+        if (labels.size() != tuple_size) {
+          throw std::runtime_error{
+              "labels size does not match number of elements in structured type"};
+        }
+
+        std::vector<std::string_view> const label_views(labels.cbegin(), labels.cend());
+        return create_npy_header(std::span<uint64_t const>(&max_elements, 1), label_views, dtypes,
+                                 sizes, MemoryOrder::C);
+      }
+    });
+
+    std::fill(std::next(header.begin(), 8), header.end(), '\0');
+    header_end_pos = header.size();
+
+    return header;
+  }
+
+public:
+  //! write single data tuple into stream
+  template <tuple_like Tup>
+    requires(convertible<Tup, tuple_type>)
+  RealBase& operator<<(Tup const& val) {
+    detail::fill(val, buffer[buffer_size]);
+    if (++buffer_size == buffer_capacity) {
+      flush_buffer();
+    }
+    ++values_written;
+    return *this;
+  }
+
+  /**
+   * Write sequence of data, given as iterator pair, into stream. In case of
+   * structured data, the iterator has to return std::tuples whose individual
+   * member types match the data types of the file.
+   */
+  template <typename TConstIter, std::sentinel_for<TConstIter> Sentinel>
+    requires(!std::contiguous_iterator<TConstIter> ||
+             (std::tuple_size_v<tuple_type> > 1 &&
+              convertible<std::iter_value_t<TConstIter>, tuple_type>))
+  RealBase& write(TConstIter begin, Sentinel end) {
+    auto f = std::bind_front(&RealBase::operator<< <tuple_type>, this);
+    auto g = std::function<void(tuple_type)>{f};
+    std::ranges::for_each(begin, end, f);
+    return *this;
+  }
+
+protected:
+  size_t header_end_pos;
+  uint64_t values_written{}, buffer_size{};
+  std::vector<std::string> labels{};
+
+  static size_t constexpr buffer_capacity =
+      std::max<size_t>(1, 256 / tuple_info<tuple_type>::sum_sizes);
+  std::array<std::array<std::byte, tuple_info<tuple_type>::sum_sizes>, buffer_capacity> buffer{};
+
+  static_assert(sizeof(buffer) == buffer_capacity * tuple_info<tuple_type>::sum_sizes);
+};
+
 } // namespace detail
 
 //! Serializable types are the fundamental arithmetic types (int, float, ...), and std::complex.
@@ -81,137 +239,42 @@ concept npy_serializable =
  * multiple template parameters, "structured" data are written.
  */
 template <npy_serializable T, npy_serializable... TArgs>
-class NpyStream {
-
-  using tuple_type = std::tuple<T, TArgs...>;
-
-  static auto constexpr& dtypes = tuple_info<tuple_type>::data_types;
-  static auto constexpr& sizes = tuple_info<tuple_type>::element_sizes;
-
+class NpyStream : public detail::RealBase<T, TArgs...> {
 public:
+  using Base = detail::RealBase<T, TArgs...>;
+  using Base::operator<<;
+  using Base::write;
+
   //! create a NpyStream (.npy file) at the given path.
-  NpyStream(std::filesystem::path const& path) {
-    if constexpr (std::size_t const size = std::tuple_size_v<tuple_type>; size > 1) {
-      labels.reserve(size);
-      for (std::size_t i = 0; i < size; ++i) {
-        labels.emplace_back(std::format("f{}", i));
-      }
-    }
+  NpyStream(std::filesystem::path const& path)
+      : Base{} {
     init(path);
   }
 
   //! create a NpyStream for structured data at the given path with labelled data columns
   template <typename Container>
-  NpyStream(std::filesystem::path const& path, Container const& labels_)
-      : labels{std::cbegin(labels_), std::cend(labels_)} {
+  NpyStream(std::filesystem::path const& path, Container const& labels)
+      : Base{labels} {
     init(path);
   }
 
   ~NpyStream() {
-    flush_buffer();
-    wrap_up(file, values_written, header_end_pos, labels, dtypes, sizes);
+    Base::flush_buffer();
+    wrap_up(file, Base::values_written, Base::header_end_pos, Base::labels, Base::dtypes,
+            Base::sizes);
   }
 
-  //! write single scalar value into stream
-  template <std::same_as<T> U = T>
-    requires(sizeof...(TArgs) == 0)
-  NpyStream& operator<<(U val) {
-    return (*this << std::tuple<T>{val});
-  }
-
-  //! write single data tuple into stream
-  template <tuple_like Tup>
-    requires(convertible<Tup, tuple_type>)
-  NpyStream& operator<<(Tup const& val) {
-    detail::fill(val, buffer[buffer_size]);
-    if (++buffer_size == buffer_capacity) {
-      flush_buffer();
-    }
-    ++values_written;
-    return *this;
-  }
-
-  void flush_buffer() {
-    file.write(reinterpret_cast<char const*>(std::as_const(buffer[0]).data()),
-               buffer_size * buffer[0].size());
-    buffer_size = 0;
-  }
-
-  //! write contiguous block of scalar data, given as std::span, into stream
-  template <std::same_as<T> U = T>
-    requires(sizeof...(TArgs) == 0)
-  NpyStream& write(std::span<U const> data) {
-    if (buffer_size) {
-      flush_buffer();
-    }
-    file.write(reinterpret_cast<char const*>(data.data()), sizeof(T) * data.size());
-    values_written += data.size();
-    return *this;
-  }
-
-  //! write contiguous block of scalar data, given as iterator pair, into stream
-  template <std::contiguous_iterator TConstIter>
-    requires(std::same_as<std::iter_value_t<TConstIter>, T> && std::tuple_size_v<tuple_type> == 1)
-  NpyStream& write(TConstIter begin, TConstIter end) {
-    return write(std::span<std::add_const_t<std::iter_value_t<TConstIter>>>{begin, end});
-  }
-
-  /**
-   * Write sequence of data, given as iterator pair, into stream. In case of
-   * structured data, the iterator has to return std::tuples whose individual
-   * member types match the data types of the file.
-   */
-  template <typename TConstIter, std::sentinel_for<TConstIter> Sentinel>
-    requires(!std::contiguous_iterator<TConstIter> ||
-             (std::tuple_size_v<tuple_type> > 1 &&
-              convertible<std::iter_value_t<TConstIter>, tuple_type>))
-  NpyStream& write(TConstIter begin, Sentinel end) {
-    std::for_each(begin, end, std::bind_front(&NpyStream::operator<< <tuple_type>, this));
-
-    return *this;
+  virtual void appendPayload(std::span<std::byte const> data) override final {
+    file.write(reinterpret_cast<char const*>(data.data()), data.size());
   }
 
 private:
   void init(std::filesystem::path const& path) {
-    uint64_t const max_elements = std::numeric_limits<uint64_t>::max();
-    std::vector<unsigned char> header;
-
-    size_t constexpr tuple_size = std::tuple_size_v<tuple_type>;
-
-    if (labels.size() == 0) {
-      if constexpr (tuple_size == 1) {
-        header = create_npy_header(std::span<uint64_t const>(&max_elements, 1), map_type(T{}),
-                                   sizeof(T));
-      } else {
-        throw std::runtime_error{
-            "labels size does not match number of elements in structured type"};
-      }
-    } else {
-      if (labels.size() != tuple_size) {
-        throw std::runtime_error{
-            "labels size does not match number of elements in structured type"};
-      }
-
-      std::vector<std::string_view> const label_views(labels.cbegin(), labels.cend());
-      header = create_npy_header(std::span<uint64_t const>(&max_elements, 1), label_views, dtypes,
-                                 sizes, MemoryOrder::C);
-    }
-
-    header_end_pos = header.size();
-    std::fill(std::next(header.begin(), 8), header.end(), '\0');
+    auto const header = Base::createPlaceholderHeader();
     file.open(path, std::ios_base::binary);
-    file.write(reinterpret_cast<char*>(header.data()), header.size());
+    file.write(reinterpret_cast<char const*>(header.data()), header.size());
   }
 
   std::ofstream file;
-  size_t header_end_pos;
-  uint64_t values_written{}, buffer_size{};
-  std::vector<std::string> labels{};
-
-  static size_t constexpr buffer_capacity =
-      std::max<size_t>(1, 256 / tuple_info<tuple_type>::sum_sizes);
-  std::array<std::array<std::byte, tuple_info<tuple_type>::sum_sizes>, buffer_capacity> buffer{};
-
-  static_assert(sizeof(buffer) == buffer_capacity * tuple_info<tuple_type>::sum_sizes);
 };
 } // namespace npystream
