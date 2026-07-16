@@ -69,8 +69,8 @@ static void fill(U const& tup, std::span<std::byte> buffer) {
 }
 
 /**
- * This class is conditionally used as base class for NpzStream in order
- * to enable/disable the functions based on the template parameters
+ * This class is conditionally used as base class in order to enable/disable
+ * its functions in the derived class based on the template parameters.
  */
 template <typename Base, typename T>
 struct Mixin {

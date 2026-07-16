@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -35,6 +36,10 @@ npystream::detail::CommonNpzStream::CommonNpzStream(std::filesystem::path const&
     , file{std::fopen(path.c_str(), "w+b")} {
   if (!file) {
     throw std::runtime_error{strerror(errno)};
+  }
+
+  if (entryName.length() > std::numeric_limits<uint16_t>::max()) {
+    throw std::runtime_error{"entryName too long"};
   }
 }
 
@@ -99,38 +104,63 @@ void npystream::detail::CommonNpzStream::finishAndPatchHeader(
   uint32_t const totalCompressedSize = static_cast<uint32_t>(compressedBytesWritten);
 
   // ZIP Central Directory at end of file
-  std::streampos cdOffset = std::ftell(file);
+  std::streampos const cdOffset = std::ftell(file);
   writeLE<uint32_t>(0x02014b50u); // Central Directory Header signature
-  writeLE<uint16_t>(20u);
-  writeLE<uint16_t>(20u);
+  writeLE<uint16_t>(45u);         // version made by
+  writeLE<uint16_t>(45u);         // version required to extract
   writeLE<uint16_t>(0x0000u);
-  writeLE<uint16_t>(8u);
-  writeLE<uint16_t>(0u);
-  writeLE<uint16_t>(0u);
-  writeLE<uint32_t>(static_cast<uint32_t>(totalCrc));
-  writeLE<uint32_t>(totalCompressedSize);
-  writeLE<uint32_t>(totalUncompressedSize);
-  writeLE<uint16_t>(static_cast<uint16_t>(entryName.length()));
-  writeLE<uint16_t>(0u);
-  writeLE<uint16_t>(0u);
-  writeLE<uint16_t>(0u);
-  writeLE<uint16_t>(0u);
+  writeLE<uint16_t>(8u); // DEFLATE
   writeLE<uint32_t>(0u);
-  writeLE<uint32_t>(static_cast<uint32_t>(lfhOffset));
+  writeLE<uint32_t>(static_cast<uint32_t>(totalCrc));
+  writeLE<uint32_t>(0xffffffffu);
+  writeLE<uint32_t>(0xffffffffu);
+  writeLE<uint16_t>(static_cast<uint16_t>(entryName.length()));
+  writeLE<uint16_t>(28);          // extra field length
+  writeLE<uint16_t>(0);           // comment length
+  writeLE<uint16_t>(0);           // disk start
+  writeLE<uint16_t>(0);           // int file attributes
+  writeLE<uint32_t>(0);           // ext file attributes
+  writeLE<uint32_t>(0xffffffffu); // LFH Disk Offset overflow marker
   std::fwrite(entryName.c_str(), 1, entryName.length(), file);
 
-  std::streampos cdEndOffset = std::ftell(file);
+  // CD ZIP64 Extra Field (Tag 0x0001)
+  writeLE<uint16_t>(0x0001u); // Tag: ZIP64
+  writeLE<uint16_t>(24u);     // size
+
+  writeLE<uint64_t>(static_cast<uint64_t>(totalUncompressedSize));
+  writeLE<uint64_t>(static_cast<uint64_t>(totalCompressedSize));
+  writeLE<uint64_t>(static_cast<uint64_t>(lfhOffset)); // True 64-bit LFH offset!
+
+  std::streampos const cdEndOffset = std::ftell(file);
   uint32_t cdSize = static_cast<uint32_t>(cdEndOffset - cdOffset);
 
-  // End of Central Directory
-  writeLE<uint32_t>(0x06054b50u);
+  std::streampos zip64EocdOffset = std::ftell(file);
+  writeLE<uint32_t>(0x06064b50u);                     // ZIP64 EOCD
+  writeLE<uint64_t>(44u);                             // size of this record remaining
+  writeLE<uint16_t>(45u);                             // version made by
+  writeLE<uint16_t>(45u);                             // version needed
+  writeLE<uint32_t>(0u);                              // disk number
+  writeLE<uint32_t>(0u);                              // disk of CD start
+  writeLE<uint64_t>(1u);                              // CD entries on this disk
+  writeLE<uint64_t>(1u);                              // total number of CD entries
+  writeLE<uint64_t>(cdSize);                          // CD size
+  writeLE<uint64_t>(static_cast<uint64_t>(cdOffset)); // CD offset
+
+  // ZIP64 End of Central Directory Locator (20 bytes)
+  writeLE<uint32_t>(0x07064b50u);                            // ZIP64 EOCD Locator
+  writeLE<uint32_t>(0u);                                     // disk number
+  writeLE<uint64_t>(static_cast<uint64_t>(zip64EocdOffset)); // ZIP64 EOCD offset
+  writeLE<uint32_t>(1u);                                     // total number of disks
+
+  // Legacy Standard EOCD Record (22 bytes)
+  writeLE<uint32_t>(0x06054b50u); // Standard EOCD
   writeLE<uint16_t>(0u);
   writeLE<uint16_t>(0u);
-  writeLE<uint16_t>(1u);
-  writeLE<uint16_t>(1u);
-  writeLE<uint32_t>(cdSize);
-  writeLE<uint32_t>(static_cast<uint32_t>(cdOffset));
-  writeLE<uint16_t>(0u);
+  writeLE<uint16_t>(0xffffu);     // marker for ZIP64
+  writeLE<uint16_t>(0xffffu);     // marker for ZIP64
+  writeLE<uint32_t>(0xffffffffu); // marker for ZIP64
+  writeLE<uint32_t>(0xffffffffu); // marker for ZIP64
+  writeLE<uint16_t>(0u);          // comment length
 
   // replace placeholder with final header
   std::fseek(file, rawHeaderDiskOffset, SEEK_SET);
@@ -139,8 +169,10 @@ void npystream::detail::CommonNpzStream::finishAndPatchHeader(
   // patch Local File Header
   std::fseek(file, lfhCrcOffset, SEEK_SET);
   writeLE<uint32_t>(static_cast<uint32_t>(totalCrc));
-  writeLE<uint32_t>(totalCompressedSize);
-  writeLE<uint32_t>(totalUncompressedSize);
+
+  std::fseek(file, lfhZip64SizesOffset, SEEK_SET);
+  writeLE<uint64_t>(static_cast<uint64_t>(totalUncompressedSize));
+  writeLE<uint64_t>(static_cast<uint64_t>(totalCompressedSize));
 
   std::fclose(file);
 }
@@ -153,20 +185,28 @@ void npystream::detail::CommonNpzStream::initZipFile(size_t placeholder_size,
   // ZIP Local File Header with dummy CRC and sizes
   lfhOffset = std::ftell(file);
   writeLE<uint32_t>(0x04034b50u); // LFH Signature
-  writeLE<uint16_t>(20u);         // Version needed to extract (2.0 for DEFLATE)
+  writeLE<uint16_t>(45u);         // Version
   writeLE<uint16_t>(0x0000u);     // General purpose bit flag
-  writeLE<uint16_t>(8u);          // Compression method: 8 = DEFLATE
+  writeLE<uint16_t>(8u);          // compression method DEFLATE
   writeLE<uint16_t>(0u);          // File time (dummy)
   writeLE<uint16_t>(0u);          // File date (dummy)
 
   lfhCrcOffset = std::ftell(file);
-  writeLE<uint32_t>(0u); // CRC-32 (Placeholder, patched later)
-  writeLE<uint32_t>(0u); // Compressed size (Placeholder)
-  writeLE<uint32_t>(0u); // Uncompressed size (Placeholder)
+  writeLE<uint32_t>(0u);          // CRC-32 (Placeholder, patched later)
+  writeLE<uint32_t>(0xffffffffu); // ZIP64 compressed size
+  writeLE<uint32_t>(0xffffffffu); // ZIP64 uncomprressed size
 
   writeLE<uint16_t>(static_cast<uint16_t>(entryName.length()));
-  writeLE<uint16_t>(0u); // Extra field length
+  writeLE<uint16_t>(20u); // Extra field length
   std::fwrite(entryName.c_str(), 1, entryName.length(), file);
+
+  // ZIP64 fields
+  writeLE<uint16_t>(0x0001);
+  writeLE<uint16_t>(16);
+
+  lfhZip64SizesOffset = std::ftell(file);
+  writeLE<uint64_t>(0u); // 64-bit Uncompressed Size (Placeholder)
+  writeLE<uint64_t>(0u); // 64-bit Compressed Size (Placeholder)
 
   // 2. Initialize zlib for raw DEFLATE (-MAX_WBITS suppresses zlib wrapper headers)
   std::memset(&strm, 0, sizeof(strm));
@@ -187,7 +227,7 @@ void npystream::detail::CommonNpzStream::initZipFile(size_t placeholder_size,
 
   // Calculate the physical disk offset where our 256 raw bytes landed!
   // LFH size + 5 bytes for the DEFLATE uncompressed block header (0x00, LEN, NLEN)
-  rawHeaderDiskOffset = lfhOffset + static_cast<std::streampos>(30 + entryName.length() + 5);
+  rawHeaderDiskOffset = lfhOffset + static_cast<std::streampos>(30 + entryName.length() + 20 + 5);
 
   // enable compression for payload
   if (auto const ret = deflateParams(&strm, static_cast<int>(compr_level), Z_DEFAULT_STRATEGY);
