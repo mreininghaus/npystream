@@ -79,8 +79,6 @@ private:
   std::vector<uint8_t> outBuffer = std::vector<uint8_t>(16 * 1024);
 
   uLong crcPayload = crc32(0L, Z_NULL, 0);
-  size_t payloadBytesWritten = 0;
-  size_t compressedBytesWritten = 0;
   size_t header_size = 0;
 
   // Physical disk offsets for later patching

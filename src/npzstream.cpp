@@ -47,7 +47,6 @@ void npystream::detail::CommonNpzStream::flushZlibOutput() {
   if (outBuffer.size() - strm.avail_out > 0) {
     size_t const bytesToDump = outBuffer.size() - strm.avail_out;
     std::fwrite(outBuffer.data(), 1, bytesToDump, file);
-    compressedBytesWritten += bytesToDump;
     strm.next_out = outBuffer.data();
     strm.avail_out = static_cast<uInt>(outBuffer.size());
   }
@@ -58,19 +57,18 @@ void npystream::detail::CommonNpzStream::appendToZip(std::span<Bytef const> data
     return;
   }
 
-  // avoid integer overflow when data.size() is too large for uInt
-  if constexpr (sizeof(size_t) > sizeof(uInt)) {
+  // avoid integer overflow when data.size() is too large for strm.avail_in,
+  // in that case, split into chunks
+  if constexpr (sizeof(size_t) > sizeof(strm.avail_in)) {
     while (data.size() > std::numeric_limits<uInt>::max()) {
-      auto const chunk =
-          data.first(std::min(data.size(), static_cast<size_t>(std::numeric_limits<uInt>::max())));
+      auto const chunk = data.first(std::numeric_limits<uInt>::max());
       appendToZip(chunk);
       data = data.subspan(chunk.size());
     }
   }
 
-  // Update payload CRC-32 independently (excluding the header!)
+  // Update payload CRC-32
   crcPayload = crc32(crcPayload, data.data(), static_cast<uInt>(data.size()));
-  payloadBytesWritten += data.size();
 
   strm.next_in = const_cast<Bytef*>(data.data()); // zlib...
   strm.avail_in = static_cast<uInt>(data.size());
@@ -94,14 +92,16 @@ void npystream::detail::CommonNpzStream::finishAndPatchHeader(
     flushZlibOutput();
   }
   flushZlibOutput();
+
+  auto const totalUncompressedSize = strm.total_in;
+  auto const totalCompressedSize = strm.total_out;
+
   deflateEnd(&strm);
 
   uLong const crcHeader = crc32(0L, finalizedHeader.data(), finalizedHeader.size());
 
-  uLong const totalCrc =
-      crc32_combine64(crcHeader, crcPayload, static_cast<z_off64_t>(payloadBytesWritten));
-  uint32_t const totalUncompressedSize = static_cast<uint32_t>(header_size + payloadBytesWritten);
-  uint32_t const totalCompressedSize = static_cast<uint32_t>(compressedBytesWritten);
+  static_assert(sizeof(z_off_t) >= sizeof(size_t), "integer overflows expected on this platform");
+  uLong const totalCrc = crc32_combine(crcHeader, crcPayload, totalUncompressedSize - header_size);
 
   // ZIP Central Directory at end of file
   std::streampos const cdOffset = std::ftell(file);
@@ -127,8 +127,8 @@ void npystream::detail::CommonNpzStream::finishAndPatchHeader(
   writeLE<uint16_t>(0x0001u); // Tag: ZIP64
   writeLE<uint16_t>(24u);     // size
 
-  writeLE<uint64_t>(static_cast<uint64_t>(totalUncompressedSize));
-  writeLE<uint64_t>(static_cast<uint64_t>(totalCompressedSize));
+  writeLE<uint64_t>(totalUncompressedSize);
+  writeLE<uint64_t>(totalCompressedSize);
   writeLE<uint64_t>(static_cast<uint64_t>(lfhOffset)); // True 64-bit LFH offset!
 
   std::streampos const cdEndOffset = std::ftell(file);
@@ -181,6 +181,9 @@ void npystream::detail::CommonNpzStream::initZipFile(size_t placeholder_size,
                                                      CompressionLevel compr_level) {
   std::vector<Bytef> placeholder(placeholder_size);
   header_size = placeholder_size;
+  if (header_size > std::numeric_limits<uInt>::max()) {
+    throw std::runtime_error{"header size too large"};
+  }
 
   // ZIP Local File Header with dummy CRC and sizes
   lfhOffset = std::ftell(file);
